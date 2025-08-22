@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, TypedDict
 from contextlib import AsyncExitStack
 import traceback
 
@@ -9,8 +9,54 @@ from datetime import datetime
 from utils.logger import logger
 import json
 import os
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+from dotenv import load_dotenv
+load_dotenv()
+class MCPClientLangChain():
+    def __init__(self, config_server : TypedDict):
+        self.config_server = config_server
+        self.client = MultiServerMCPClient(self.config_server)
+        self.tools = []
+        self.llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENAI_API_KEY"))
+    async def get_mcp_tools(self):
+        tools = await self.client.get_tools()
+        self.tools = tools
+        return tools
+    
+    async def stream_query(self, query: str):
+        if not self.tools:
+            await self.get_mcp_tools()
+        agent = create_react_agent(self.llm, tools=self.tools)
+        response = await agent.ainvoke({"messages": query})
+        return response
 
-from openai import OpenAI
+
+# config_server = {
+#     "deepwiki" : {
+#         "url" : "https://mcp.deepwiki.com/sse",
+#         "transport" : "sse"
+#     }
+# }
+
+
+
+
+
+
+
+
+# import asyncio
+
+# async def main():
+#     client = MCPClientLangChain(config_server)
+#     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+#     response = await client.stream_query("use the tool and tell me what is the main fonction in langchain and what means runnable")
+#     print(response)
+
+# # Exécuter la fonction async
+# asyncio.run(main())
 
 
 
