@@ -13,3 +13,18 @@ wheels/
 # Conversations ou logs
 conversations/
 *.log
+
+# Frontend Node.js
+front_langgraph/node_modules/
+front_langgraph/dist/
+front_langgraph/build/
+front_langgraph/.vite/
+front_langgraph/coverage/
+front_langgraph/.nyc_output/
+front_langgraph/.cache/
+front_langgraph/npm-debug.log*
+front_langgraph/yarn-debug.log*
+front_langgraph/yarn-error.log*
+front_langgraph/lerna-debug.log*
+front_langgraph/.DS_Store
+front_langgraph/Thumbs.db
