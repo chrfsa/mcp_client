@@ -1,0 +1,15 @@
+langgraph-cli[inmem]
+langchain_openai
+anthropic
+beautifulsoup4
+fastapi
+langchain
+langchain-mcp-adapters
+langchain-openai
+langgraph
+mcp
+openai
+pydantic
+python-decouple
+python-dotenv
+streamlit
