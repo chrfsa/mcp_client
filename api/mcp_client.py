@@ -13,6 +13,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from dotenv import load_dotenv
+import asyncio
 load_dotenv()
 class MCPClientLangChain():
     def __init__(self, config_server : TypedDict):
@@ -31,6 +32,12 @@ class MCPClientLangChain():
         agent = create_react_agent(self.llm, tools=self.tools)
         response = await agent.ainvoke({"messages": query})
         return response
+    async def graph(self):
+        tools = await self.get_mcp_tools()
+        agent = create_react_agent(self.llm, tools=tools)
+        return agent
+    def create_graph(self):
+        return asyncio.run(self.graph())
 
 
 # config_server = {
