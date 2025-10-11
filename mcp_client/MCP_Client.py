@@ -151,7 +151,7 @@ class UniversalMCPClient:
             # Sequential connection - stop on first error
             for config in configs:
                 try:
-                    server_info = await self.add_server(config)
+                    server_info = await self._add_server(config)
                     results[config.name] = server_info
                 except Exception as e:
                     logger.error(f"❌ Failed to connect to {config.name}: {e}")
@@ -221,11 +221,11 @@ class UniversalMCPClient:
         try:
             # Create session based on transport
             if config.transport == "stdio":
-                session = await self._connect_stdio(config)
+                session, exit_stack = await self._connect_stdio(config)
             elif config.transport == "sse":
-                session = await self._connect_sse(config)
+                session, exit_stack = await self._connect_sse(config)
             elif config.transport == "streamable_http":
-                session = await self._connect_streamable_http(config)
+                session, exit_stack = await self._connect_streamable_http(config)
             else:
                 raise ValueError(f"Unknown transport: {config.transport}")
             
@@ -239,7 +239,8 @@ class UniversalMCPClient:
                 config=config,
                 session=session,
                 tools=tools,
-                connected_at=datetime.utcnow()
+                connected_at=datetime.utcnow(),
+                exit_stack=exit_stack
             )
             self._servers[config.name] = server_info
             
@@ -255,85 +256,95 @@ class UniversalMCPClient:
         """Connect via stdio transport"""
         if not config.command or not config.args:
             raise ValueError("command and args required for stdio")
-        
-        server_params = StdioServerParameters(
-            command=config.command,
-            args=config.args,
-            env=config.env,
-            cwd=config.cwd
-        )
-        
-        # Enter context with exit_stack
-        transport = await self._exit_stack.enter_async_context(
-            stdio_client(server_params)
-        )
-        read, write = transport
-        
-        session = await self._exit_stack.enter_async_context(
-            ClientSession(read, write)
-        )
-        
-        # Initialize session (MCP handshake)
-        await session.initialize()
-        
-        return session
+        exit_stack = AsyncExitStack()
+        try:
+            server_params = StdioServerParameters(
+                command=config.command,
+                args=config.args,
+                env=config.env,
+                cwd=config.cwd
+            )
+            
+            # Enter context with exit_stack
+            transport = await exit_stack.enter_async_context(
+                stdio_client(server_params)
+            )
+            read, write = transport
+            
+            session = await exit_stack.enter_async_context(
+                ClientSession(read, write)
+            )
+            
+            # Initialize session (MCP handshake)
+            await session.initialize()
+            
+            return session, exit_stack
+        except Exception as e:
+            await exit_stack.aclose()
+            raise e
     
     async def _connect_sse(self, config: ServerConfig) -> ClientSession:
         """Connect via SSE transport"""
         if not config.url:
             raise ValueError("url required for SSE")
-        
-        timeout = config.timeout or 5.0
-        sse_read_timeout = config.sse_read_timeout or 300.0
-        
-        transport = await self._exit_stack.enter_async_context(
-            sse_client(
-                config.url,
-                config.headers,
-                timeout,
-                sse_read_timeout
+        exit_stack = AsyncExitStack()
+        try:
+            timeout = config.timeout or 5.0
+            sse_read_timeout = config.sse_read_timeout or 300.0
+            
+            transport = await exit_stack.enter_async_context(
+                sse_client(
+                    config.url,
+                    config.headers,
+                    timeout,
+                    sse_read_timeout
+                )
             )
-        )
-        read, write = transport
-        
-        session = await self._exit_stack.enter_async_context(
-            ClientSession(read, write)
-        )
-        
-        # Initialize session (MCP handshake)
-        await session.initialize()
-        
-        return session
+            read, write = transport
+            
+            session = await exit_stack.enter_async_context(
+                ClientSession(read, write)
+            )
+            
+            # Initialize session (MCP handshake)
+            await session.initialize()
+            
+            return session, exit_stack
+        except Exception as e:
+            await exit_stack.aclose()
+            raise e
     
     async def _connect_streamable_http(self, config: ServerConfig) -> ClientSession:
         """Connect via Streamable HTTP transport"""
         if not config.url:
             raise ValueError("url required for Streamable HTTP")
-        
-        timeout = timedelta(seconds=config.timeout or 30)
-        sse_read_timeout = timedelta(seconds=config.sse_read_timeout or 300)
-        
-        transport = await self._exit_stack.enter_async_context(
-            streamablehttp_client(
-                config.url,
-                config.headers,
-                timeout,
-                sse_read_timeout,
-                terminate_on_close=True
+        exit_stack = AsyncExitStack()
+        try:
+            timeout = timedelta(seconds=config.timeout or 30)
+            sse_read_timeout = timedelta(seconds=config.sse_read_timeout or 300)
+            
+            transport = await exit_stack.enter_async_context(
+                streamablehttp_client(
+                    config.url,
+                    config.headers,
+                    timeout,
+                    sse_read_timeout,
+                    terminate_on_close=True
+                )
             )
-        )
-        read, write, session_id = transport
+            read, write, session_id = transport
+            session = await exit_stack.enter_async_context(
+                ClientSession(read, write)
+            )
+            
+            # Initialize session (MCP handshake)
+            await session.initialize()
+            
+            return session, exit_stack
+        except Exception as e:
+            await exit_stack.aclose()
+            raise e
         
-        print(f"   Session ID: {session_id}")
-        
-        session = await self._exit_stack.enter_async_context(
-            ClientSession(read, write)
-        )
-        
-        # Initialize session (MCP handshake)
-        await session.initialize()
-        
-        return session
     
     async def call_tool(
         self,
@@ -405,11 +416,37 @@ class UniversalMCPClient:
     
     async def disconnect_all(self):
         """Disconnect all servers"""
-        print("🔌 Disconnecting all servers...")
-        await self._exit_stack.aclose()
+        logger.info("🔌 Disconnecting all servers...")
+        for server_name, server_infor in list(self._servers.items()):
+            try:
+                logger.info(f"🔌 closing {server_name}...")
+                await server_infor.exit_stack.aclose()
+            except Exception as e:
+                logger.error(f"❌ Failed to disconnect {server_name}: {e}")
         self._servers.clear()
-        print("✅ All servers disconnected")
-    
+        logger.info("✅ All servers disconnected")
+    async def disconnect_server(self, server_name: str):
+        """Disconnect a specific server
+        
+        Args:
+            server_name: Name of the server to disconnect
+            
+        Raises:
+            ValueError: If server doesn't exist
+        """
+        if server_name not in self._servers:
+            raise ValueError(f"Server '{server_name}' not found")
+        
+        logger.info(f"🔌 Disconnecting {server_name}...")
+        
+        server_info = self._servers[server_name]
+        try:
+            await server_info.exit_stack.aclose()
+            del self._servers[server_name]
+            logger.info(f"✅ {server_name} disconnected")
+        except Exception as e:
+            logger.error(f"❌ Error disconnecting {server_name}: {e}")
+            raise
     # Context manager support
     async def __aenter__(self):
         return self
@@ -485,15 +522,15 @@ async def main():
         # ))
         await client.add_servers([
             ServerConfig(
-            name="weather",
-            transport="stdio",
-            command="python",
-            args=["/home/said/Bureau/MCP/weather/weather.py"]
-        ),
+                name="weather",
+                transport="stdio",
+                command="python",
+                args=["/home/said/Bureau/MCP/weather/weather.py"]
+            ),
             ServerConfig(
-            name="deepwiki",
-            transport="sse",
-            url="https://mcp.deepwiki.com/sse"
+                name="deepwiki",
+                transport="sse",
+                url="https://mcp.deepwiki.com/sse"
             ),
             ServerConfig(
                 name="firecrawl-mcp",
