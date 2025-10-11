@@ -75,6 +75,7 @@ class ServerInfo:
     session: ClientSession
     tools: List[Tool]
     connected_at: datetime
+    exit_stack: AsyncExitStack
 
 
 # ============================================================================
@@ -121,10 +122,9 @@ class UniversalMCPClient:
     """
     
     def __init__(self):
-        self._exit_stack = AsyncExitStack()
         self._servers: Dict[str, ServerInfo] = {}
     
-    async def add_server(self, config: ServerConfig) -> ServerInfo:
+    async def _add_server(self, config: ServerConfig) -> ServerInfo:
         """Add and connect to an MCP server
         
         Args:
@@ -184,7 +184,74 @@ class UniversalMCPClient:
         except Exception as e:
             print(f"❌ Failed to connect to {config.name}: {e}")
             raise ConnectionError(f"Failed to connect to {config.name}") from e
-    
+    async def add_servers(
+        self, 
+        configs: List[ServerConfig],
+        fail_fast: bool = False
+    ) -> Dict[str, Union[ServerInfo, Exception]]:
+        """Add multiple servers at once
+        
+        Args:
+            configs: List of server configurations
+            fail_fast: If True, stop on first error. If False, continue and return results
+            
+        Returns:
+            Dict {server_name: ServerInfo or Exception}
+            
+        Example:
+            results = await client.add_servers([
+                ServerConfig(name="weather", transport="stdio", ...),
+                ServerConfig(name="deepwiki", transport="sse", ...)
+            ])
+        """
+        logger.info(f"🔌 Connecting to {len(configs)} servers...")
+        
+        results = {}
+        
+        if fail_fast:
+            # Sequential connection - stop on first error
+            for config in configs:
+                try:
+                    server_info = await self.add_server(config)
+                    results[config.name] = server_info
+                except Exception as e:
+                    logger.error(f"❌ Failed to connect to {config.name}: {e}")
+                    results[config.name] = e
+                    raise
+        else:
+            # Parallel connection - collect all results
+            tasks = []
+            for config in configs:
+                task = self._add_server_safe(config)
+                tasks.append(task)
+            
+            # Wait for all connections
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Build results dict
+            for config, result in zip(configs, task_results):
+                if isinstance(result, Exception):
+                    logger.error(f"❌ Failed to connect to {config.name}: {result}")
+                    results[config.name] = result
+                else:
+                    results[config.name] = result
+        
+        # Summary
+        successful = sum(1 for r in results.values() if isinstance(r, ServerInfo))
+        failed = len(results) - successful
+        
+        logger.info(f"✅ Connected: {successful}/{len(configs)} servers")
+        if failed > 0:
+            logger.warning(f"⚠️  Failed: {failed} servers")
+        
+        return results
+
+    async def _add_server_safe(self, config: ServerConfig) -> Union[ServerInfo, Exception]:
+        """Helper to add server and catch exceptions"""
+        try:
+            return await self._add_server(config)
+        except Exception as e:
+            return e
     async def _connect_stdio(self, config: ServerConfig) -> ClientSession:
         """Connect via stdio transport"""
         if not config.command or not config.args:
@@ -409,19 +476,6 @@ async def main():
     print()
     
     async with UniversalMCPClient() as client:
-        # connect to stdio server 
-        await client.add_server(ServerConfig(
-            name="weather",
-            transport="stdio",
-            command="python",
-            args=["/home/said/Bureau/MCP/weather/weather.py"]
-        ))
-        # Connect to a remote SSE server
-        await client.add_server(ServerConfig(
-            name="deepwiki",
-            transport="sse",
-            url="https://mcp.deepwiki.com/sse"
-        ))
         
         # You can also connect to Streamable HTTP servers
         # await client.add_server(ServerConfig(
@@ -430,7 +484,30 @@ async def main():
         #     url="http://localhost:8080/mcp",
         #     headers={"Authorization": "Bearer your-token"}
         # ))
-        
+        await client.add_servers([
+            ServerConfig(
+            name="weather",
+            transport="stdio",
+            command="python",
+            args=["/home/said/Bureau/MCP/weather/weather.py"]
+        ),
+            ServerConfig(
+            name="deepwiki",
+            transport="sse",
+            url="https://mcp.deepwiki.com/sse"
+            ),
+            ServerConfig(
+                name="firecrawl-mcp",
+                transport="stdio",
+                command="npx",
+                args=["-y", "firecrawl-mcp"],
+                env={"FIRECRAWL_API_KEY": "fc-51f662a6cb2543a9a18df427bc368b2f"}
+            ),
+            ServerConfig(
+                name="filesystem",
+                transport="stdio",
+                command="npx",
+                args=["-y", "@modelcontextprotocol/server-filesystem"])])
         print()
         print("=" * 60)
         print("CONNECTED SERVERS & THEIR TOOLS")
