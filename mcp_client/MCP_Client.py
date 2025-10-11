@@ -123,67 +123,6 @@ class UniversalMCPClient:
     
     def __init__(self):
         self._servers: Dict[str, ServerInfo] = {}
-    
-    async def _add_server(self, config: ServerConfig) -> ServerInfo:
-        """Add and connect to an MCP server
-        
-        Args:
-            config: Server configuration
-            
-        Returns:
-            Information about the connected server
-            
-        Raises:
-            ValueError: If config is invalid or server already exists
-            ConnectionError: If connection fails
-        """
-        # Validation
-        if config.name in self._servers:
-            raise ValueError(f"Server '{config.name}' already exists")
-        
-        # Validate transport
-        valid_transports = ["stdio", "sse", "streamable_http"]
-        if config.transport not in valid_transports:
-            raise ValueError(
-                f"Invalid transport '{config.transport}'. "
-                f"Must be one of: {valid_transports}"
-            )
-        
-        logger.info(f"🔌 Connecting to {config.name} ({config.transport})...")
-        
-        try:
-            # Create session based on transport
-            if config.transport == "stdio":
-                session = await self._connect_stdio(config)
-            elif config.transport == "sse":
-                session = await self._connect_sse(config)
-            elif config.transport == "streamable_http":
-                session = await self._connect_streamable_http(config)
-            else:
-                raise ValueError(f"Unknown transport: {config.transport}")
-            
-            # Get available tools
-            tools_response = await session.list_tools()
-            tools = tools_response.tools
-            
-            # Store server info
-            server_info = ServerInfo(
-                name=config.name,
-                config=config,
-                session=session,
-                tools=tools,
-                connected_at=datetime.utcnow()
-            )
-            self._servers[config.name] = server_info
-            
-            logger.info(f"✅ Connected to {config.name}")
-            logger.info(f"   Tools: {[t.name for t in tools]}")
-            
-            return server_info
-            
-        except Exception as e:
-            print(f"❌ Failed to connect to {config.name}: {e}")
-            raise ConnectionError(f"Failed to connect to {config.name}") from e
     async def add_servers(
         self, 
         configs: List[ServerConfig],
@@ -252,6 +191,66 @@ class UniversalMCPClient:
             return await self._add_server(config)
         except Exception as e:
             return e
+    async def _add_server(self, config: ServerConfig) -> ServerInfo:
+        """Add and connect to an MCP server
+        
+        Args:
+            config: Server configuration
+            
+        Returns:
+            Information about the connected server
+            
+        Raises:
+            ValueError: If config is invalid or server already exists
+            ConnectionError: If connection fails
+        """
+        # Validation
+        if config.name in self._servers:
+            raise ValueError(f"Server '{config.name}' already exists")
+        
+        # Validate transport
+        valid_transports = ["stdio", "sse", "streamable_http"]
+        if config.transport not in valid_transports:
+            raise ValueError(
+                f"Invalid transport '{config.transport}'. "
+                f"Must be one of: {valid_transports}"
+            )
+        
+        logger.info(f"🔌 Connecting to {config.name} ({config.transport})...")
+        
+        try:
+            # Create session based on transport
+            if config.transport == "stdio":
+                session = await self._connect_stdio(config)
+            elif config.transport == "sse":
+                session = await self._connect_sse(config)
+            elif config.transport == "streamable_http":
+                session = await self._connect_streamable_http(config)
+            else:
+                raise ValueError(f"Unknown transport: {config.transport}")
+            
+            # Get available tools
+            tools_response = await session.list_tools()
+            tools = tools_response.tools
+            
+            # Store server info
+            server_info = ServerInfo(
+                name=config.name,
+                config=config,
+                session=session,
+                tools=tools,
+                connected_at=datetime.utcnow()
+            )
+            self._servers[config.name] = server_info
+            
+            logger.info(f"✅ Connected to {config.name}")
+            logger.info(f"   Tools: {[t.name for t in tools]}")
+            
+            return server_info
+            
+        except Exception as e:
+            print(f"❌ Failed to connect to {config.name}: {e}")
+            raise ConnectionError(f"Failed to connect to {config.name}") from e
     async def _connect_stdio(self, config: ServerConfig) -> ClientSession:
         """Connect via stdio transport"""
         if not config.command or not config.args:
