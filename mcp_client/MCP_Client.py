@@ -121,23 +121,31 @@ class UniversalMCPClient:
     """
     
     def __init__(self):
-        self._exit_stack = AsyncExitStack()
-        self._servers: Dict[str, ServerInfo] = {}
-    
-    async def add_server(self, config: ServerConfig) -> ServerInfo:
+        self._exit_stack: Dict[str, AsyncExitStack] = {}
+        self._user_servers: Dict[str, dict[str, ServerInfo]] = {}
+    def _get_stack(self, user_id: str) -> AsyncExitStack:
+        stack = self._exit_stack.get(user_id)
+        if not stack:
+            stack = AsyncExitStack()
+            self._exit_stack[user_id] = stack
+        return stack
+    def _get_user_servers(self, user_id: str) -> dict[str, ServerInfo]:
+        return self._user_servers.setdefault(user_id, {})
+    async def add_server(self, user_id: str, config: ServerConfig) -> ServerInfo:
         """Add a single server"""
-        if config.name in self._servers:
-            raise ValueError(f"Server '{config.name}' already exists")
+        servers = self._get_user_servers(user_id)
+        if config.name in servers:
+            raise ValueError(f"Server '{config.name}' already exists for user {user_id}")
         
         logger.info(f"🔌 Connecting to {config.name}...")
-        
+        stack = self._get_stack(user_id)
         # Connexion selon le transport
         if config.transport == "stdio":
-            session = await self._connect_stdio(config)
+            session = await self._connect_stdio(config, stack)
         elif config.transport == "sse":
-            session = await self._connect_sse(config)
+            session = await self._connect_sse(config, stack)
         elif config.transport == "streamable_http":
-            session = await self._connect_streamable_http(config)
+            session = await self._connect_streamable_http(config, stack)
         
         # Récupérer les tools
         tools_response = await session.list_tools()
@@ -150,23 +158,24 @@ class UniversalMCPClient:
             tools=tools_response.tools,
             connected_at=datetime.utcnow()
         )
-        self._servers[config.name] = server_info
+        servers[config.name] = server_info
         
-        logger.info(f"✅ Connected to {config.name}")
+        logger.info(f"✅ Connected to {config.name} for user {user_id}")
         return server_info
     
     async def add_servers(
         self, 
+        user_id: str,
         configs: List[ServerConfig],
         fail_fast: bool = False
     ) -> Dict[str, Union[ServerInfo, Exception]]:
         """Add multiple servers sequentially"""
         logger.info(f"🔌 Connecting to {len(configs)} servers...")
-        results = {}
+        results: Dict[str, Union[ServerInfo, Exception]] = {}
         
         for config in configs:
             try:
-                server_info = await self.add_server(config)
+                server_info = await self.add_server(user_id, config)
                 results[config.name] = server_info
             except Exception as e:
                 logger.error(f"❌ Failed: {config.name}: {e}")
@@ -179,7 +188,7 @@ class UniversalMCPClient:
         
         return results
     
-    async def _connect_stdio(self, config: ServerConfig) -> ClientSession:
+    async def _connect_stdio(self, config: ServerConfig, stack: AsyncExitStack) -> ClientSession:
         """Connect via stdio using global exit_stack"""
         server_params = StdioServerParameters(
             command=config.command,
@@ -189,21 +198,21 @@ class UniversalMCPClient:
         )
         
         # Utilise self._exit_stack (le global)
-        transport = await self._exit_stack.enter_async_context(
+        transport = await stack.enter_async_context(
             stdio_client(server_params)
         )
         read, write = transport
         
-        session = await self._exit_stack.enter_async_context(
+        session = await stack.enter_async_context(
             ClientSession(read, write)
         )
         
         await session.initialize()
         return session
     
-    async def _connect_sse(self, config: ServerConfig) -> ClientSession:
+    async def _connect_sse(self, config: ServerConfig, stack: AsyncExitStack) -> ClientSession:
         """Connect via SSE using global exit_stack"""
-        transport = await self._exit_stack.enter_async_context(
+        transport = await stack.enter_async_context(
             sse_client(
                 config.url,
                 config.headers,
@@ -213,16 +222,16 @@ class UniversalMCPClient:
         )
         read, write = transport
         
-        session = await self._exit_stack.enter_async_context(
+        session = await stack.enter_async_context(
             ClientSession(read, write)
         )
         
         await session.initialize()
         return session
     
-    async def _connect_streamable_http(self, config: ServerConfig) -> ClientSession:
+    async def _connect_streamable_http(self, config: ServerConfig, stack: AsyncExitStack) -> ClientSession:
         """Connect via Streamable HTTP using global exit_stack"""
-        transport = await self._exit_stack.enter_async_context(
+        transport = await stack.enter_async_context(
             streamablehttp_client(
                 config.url,
                 config.headers,
@@ -232,51 +241,50 @@ class UniversalMCPClient:
             )
         )
         read, write, session_id = transport
-        
-        session = await self._exit_stack.enter_async_context(
+        logger.info(f"🔌 Connected to {config.name} with session ID: {session_id}")
+        session = await stack.enter_async_context(
             ClientSession(read, write)
         )
         
         await session.initialize()
         return session
     
-    async def call_tool(self, server_name: str, tool_name: str, 
+    async def call_tool(self, user_id: str, server_name: str, tool_name: str, 
                        arguments: Optional[Dict[str, Any]] = None) -> Any:
         """Call a tool on a server"""
-        if server_name not in self._servers:
-            raise ValueError(f"Server '{server_name}' not found")
+        servers = self._get_user_servers(user_id)
+        if server_name not in servers:
+            raise ValueError(f"Server '{server_name}' not found for user {user_id}")
         
-        server = self._servers[server_name]
+        server = servers[server_name]
         result = await server.session.call_tool(tool_name, arguments or {})
         return result
     
-    def list_servers(self) -> List[str]:
+    def list_servers(self, user_id: str) -> List[str]:
         """List connected servers"""
-        return list(self._servers.keys())
+        servers = self._get_user_servers(user_id)
+        return list(servers.keys())
     
-    def list_tools(self, server_name: Optional[str] = None) -> Dict[str, List[Tool]]:
+    def list_tools(self, user_id: str, server_name: Optional[str] = None) -> Dict[str, List[Tool]]:
         """List available tools"""
+        servers = self._get_user_servers(user_id)
         if server_name:
-            if server_name not in self._servers:
+            if server_name not in servers:
                 return {}
-            return {server_name: self._servers[server_name].tools}
-        
-        return {name: info.tools for name, info in self._servers.items()}
+            return {server_name: servers[server_name].tools}
+        return {name: info.tools for name, info in servers.items()}
     
-    def get_server_info(self, server_name: str) -> Optional[ServerInfo]:
-        """Get server information"""
-        return self._servers.get(server_name)
-    
+    async def disconnect_user(self, user_id: str):
+        # Déconnecte uniquement ce user
+        servers = self._user_servers.pop(user_id, None)
+        stack = self._exit_stack.pop(user_id, None)
+        if stack:
+            await stack.aclose()
+
     async def disconnect_all(self):
-        """Disconnect all servers gracefully"""
-        if not self._servers:
-            return
-        
-        logger.info("🔌 Disconnecting all servers...")
-        await self._exit_stack.aclose()
-        self._servers.clear()
-        logger.info("✅ All servers disconnected")
-    
+        # Déconnecte tout le monde (ex: arrêt du process)
+        for user_id in list(self._exit_stack.keys()):
+            await self.disconnect_user(user_id)
     async def __aenter__(self):
         return self
     
@@ -332,18 +340,99 @@ def create_stdio_config(
 import asyncio
 
 async def main():
-    """Complete example of using the MCP client"""
+    # """Complete example of using the MCP client"""
     
-    print("=" * 60)
-    print("Universal MCP Client - Example")
-    print("=" * 60)
-    print()
+    # print("=" * 60)
+    # print("Universal MCP Client - Example")
+    # print("=" * 60)
+    # print()
     
-    client = UniversalMCPClient()  # ← PAS de "async with"
+    # client = UniversalMCPClient()  # ← PAS de "async with"
     
-    try:
-        await client.add_servers([
-            ServerConfig(
+    # try:
+    #     await client.add_servers([
+    #         ServerConfig(
+    #             name="weather",
+    #             transport="stdio",
+    #             command="python",
+    #             args=["/home/said/Bureau/MCP/weather/weather.py"]
+    #         ),
+    #         ServerConfig(
+    #             name="deepwiki",
+    #             transport="sse",
+    #             url="https://mcp.deepwiki.com/sse"
+    #         ),
+    #         ServerConfig(
+    #             name="firecrawl-mcp",
+    #             transport="stdio",
+    #             command="npx",
+    #             args=["-y", "firecrawl-mcp"],
+    #             env={"FIRECRAWL_API_KEY": "fc-51f662a6cb2543a9a18df427bc368b2f"}
+    #         ),
+    #         ServerConfig(
+    #             name="filesystem",
+    #             transport="stdio",
+    #             command="npx",
+    #             args=["-y", "@modelcontextprotocol/server-filesystem"]
+    #         )
+    #     ])
+        
+    #     print()
+    #     print("=" * 60)
+    #     print("CONNECTED SERVERS & THEIR TOOLS")
+    #     print("=" * 60)
+        
+    #     print(f"\n📋 Connected servers: {client.list_servers()}")
+        
+    #     all_tools = client.list_tools()
+    #     for server_name, tools in all_tools.items():
+    #         print(f"\n🔧 {server_name}:")
+    #         for tool in tools:
+    #             print(f"   - {tool.name}: {tool.description}")
+        
+    #     print()
+    #     print("=" * 60)
+    #     print("CALLING TOOLS")
+    #     print("=" * 60)
+    #     print()
+        
+    #     try:
+    #         result = await client.call_tool(
+    #             "weather",
+    #             "get_alerts",
+    #             {"state": "CA"}
+    #         )
+    #         print(f"\n📊 Weather Result:")
+    #         print(result)
+    #     except Exception as e:
+    #         print(f"\n❌ Error: {e}")
+        
+    #     print()
+    #     print("=" * 60)
+    #     print("SERVER DETAILS")
+    #     print("=" * 60)
+        
+    #     weather_info = client.get_server_info("weather")
+    #     if weather_info:
+    #         print(f"\n📡 {weather_info.name}:")
+    #         print(f"   Transport: {weather_info.config.transport}")
+    #         print(f"   Connected at: {weather_info.connected_at}")
+    #         print(f"   Available tools: {len(weather_info.tools)}")
+    
+    # finally:
+    #     # Disconnect explicitly before finishing
+    #     print()
+    #     print("=" * 60)
+    #     print("Disconnecting...")
+    #     print("=" * 60)
+    #     await client.disconnect_all()
+    #     print("✅ All servers disconnected")
+    client = UniversalMCPClient()
+    user_a = "user_123"
+    user_b = "user_456"
+
+    # User A ajoute ses serveurs
+    await client.add_servers(user_a, [ServerConfig(
                 name="weather",
                 transport="stdio",
                 command="python",
@@ -368,58 +457,17 @@ async def main():
                 args=["-y", "@modelcontextprotocol/server-filesystem"]
             )
         ])
-        
-        print()
-        print("=" * 60)
-        print("CONNECTED SERVERS & THEIR TOOLS")
-        print("=" * 60)
-        
-        print(f"\n📋 Connected servers: {client.list_servers()}")
-        
-        all_tools = client.list_tools()
-        for server_name, tools in all_tools.items():
-            print(f"\n🔧 {server_name}:")
-            for tool in tools:
-                print(f"   - {tool.name}: {tool.description}")
-        
-        print()
-        print("=" * 60)
-        print("CALLING TOOLS")
-        print("=" * 60)
-        print()
-        
-        try:
-            result = await client.call_tool(
-                "weather",
-                "get_alerts",
-                {"state": "CA"}
-            )
-            print(f"\n📊 Weather Result:")
-            print(result)
-        except Exception as e:
-            print(f"\n❌ Error: {e}")
-        
-        print()
-        print("=" * 60)
-        print("SERVER DETAILS")
-        print("=" * 60)
-        
-        weather_info = client.get_server_info("weather")
-        if weather_info:
-            print(f"\n📡 {weather_info.name}:")
-            print(f"   Transport: {weather_info.config.transport}")
-            print(f"   Connected at: {weather_info.connected_at}")
-            print(f"   Available tools: {len(weather_info.tools)}")
-    
-    finally:
-        # Disconnect explicitly before finishing
-        print()
-        print("=" * 60)
-        print("Disconnecting...")
-        print("=" * 60)
-        await client.disconnect_all()
-        print("✅ All servers disconnected")
 
+    # User B n’est pas impacté
+    print(client.list_servers(user_a))  # ['weather']
+    print(client.list_servers(user_b))  # []
+
+    # Appel d’outil pour A
+    res_a = await client.call_tool(user_a, "weather", "get_alerts", {"state": "CA"})
+    print(res_a)
+    # Déconnexion d’A n’affecte pas B
+    await client.disconnect_user(user_a)
+    print(client.list_servers(user_b))  # toujours []
 
 if __name__ == "__main__":
     asyncio.run(main())
