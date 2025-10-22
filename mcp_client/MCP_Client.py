@@ -121,9 +121,17 @@ class UniversalMCPClient:
     """
     
     def __init__(self):
-        self._exit_stack = AsyncExitStack()
-        self._servers: Dict[str, ServerInfo] = {}
-    
+        self._exit_stack: Dict[str, AsyncExitStack] = {}
+        self._user_servers: Dict[str, dict[str, ServerInfo]] = {}
+    def _get_stack(self, user_id: str) -> AsyncExitStack:
+        stack = self._exit_stack.get(user_id)
+        if not stack:
+            stack = AsyncExitStack()
+            self._exit_stack[user_id] = stack
+        return stack
+    def _get_user_servers(self, user_id: str) -> dict[str, ServerInfo]:
+        return self._user_servers.get(user_id, {})
+        
     async def add_server(self, config: ServerConfig) -> ServerInfo:
         """Add a single server"""
         if config.name in self._servers:
