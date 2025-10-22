@@ -131,7 +131,7 @@ class UniversalMCPClient:
         return stack
     def _get_user_servers(self, user_id: str) -> dict[str, ServerInfo]:
         return self._user_servers.get(user_id, {})
-        
+
     async def add_server(self, config: ServerConfig) -> ServerInfo:
         """Add a single server"""
         if config.name in self._servers:
@@ -187,7 +187,7 @@ class UniversalMCPClient:
         
         return results
     
-    async def _connect_stdio(self, config: ServerConfig) -> ClientSession:
+    async def _connect_stdio(self, config: ServerConfig, stack: AsyncExitStack) -> ClientSession:
         """Connect via stdio using global exit_stack"""
         server_params = StdioServerParameters(
             command=config.command,
@@ -197,21 +197,21 @@ class UniversalMCPClient:
         )
         
         # Utilise self._exit_stack (le global)
-        transport = await self._exit_stack.enter_async_context(
+        transport = await stack.enter_async_context(
             stdio_client(server_params)
         )
         read, write = transport
         
-        session = await self._exit_stack.enter_async_context(
+        session = await stack.enter_async_context(
             ClientSession(read, write)
         )
         
         await session.initialize()
         return session
     
-    async def _connect_sse(self, config: ServerConfig) -> ClientSession:
+    async def _connect_sse(self, config: ServerConfig, stack: AsyncExitStack) -> ClientSession:
         """Connect via SSE using global exit_stack"""
-        transport = await self._exit_stack.enter_async_context(
+        transport = await stack.enter_async_context(
             sse_client(
                 config.url,
                 config.headers,
@@ -221,16 +221,16 @@ class UniversalMCPClient:
         )
         read, write = transport
         
-        session = await self._exit_stack.enter_async_context(
+        session = await stack.enter_async_context(
             ClientSession(read, write)
         )
         
         await session.initialize()
         return session
     
-    async def _connect_streamable_http(self, config: ServerConfig) -> ClientSession:
+    async def _connect_streamable_http(self, config: ServerConfig, stack: AsyncExitStack) -> ClientSession:
         """Connect via Streamable HTTP using global exit_stack"""
-        transport = await self._exit_stack.enter_async_context(
+        transport = await stack.enter_async_context(
             streamablehttp_client(
                 config.url,
                 config.headers,
@@ -240,8 +240,8 @@ class UniversalMCPClient:
             )
         )
         read, write, session_id = transport
-        
-        session = await self._exit_stack.enter_async_context(
+        logger.info(f"🔌 Connected to {config.name} with session ID: {session_id}")
+        session = await stack.enter_async_context(
             ClientSession(read, write)
         )
         
