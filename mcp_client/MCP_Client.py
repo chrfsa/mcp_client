@@ -427,7 +427,56 @@ class UniversalMCPClient:
         await self.close_all()
         # Don't suppress exceptions
         return False
+async def main():
+    """Example usage"""
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Create client
+    client = UniversalMCPClient()
+    
+    
+    await client.add_servers([ServerConfig(
+        name="weather",
+        transport="stdio",
+        command="python",
+        args=["/home/said/Bureau/MCP/weather/weather.py"],
+    ),ServerConfig(
+        name="deepwiki",
+        transport="sse",
+        url="https://mcp.deepwiki.com/sse",
+    ),ServerConfig(
+        name="firecrawl",
+        transport="stdio",
+        command="npx",
+        args=["-y", "firecrawl-mcp"],
+    )])
+    
+    # List tools
+    tools = client.list_tools()
+    print(f"\n📋 Available tools:")
+    for server_name, server_tools in tools.items():
+        print(f"  {server_name}: {[t.name for t in server_tools]}")
+    
+    # Call tool
+    print("\n🌤️  Fetching weather alerts for CA...")
+    result = await client.call_tool("weather", "get_alerts", {"state": "CA"})
+    
+    # Print first alert only to keep output manageable
+    if result and result.content:
+        content = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
+        first_alert = content.split('\n---\n')[0] if '\n---\n' in content else content[:500]
+        print(f"\n{first_alert}\n")
+    
 
+    await client.close_all()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 
 
 
