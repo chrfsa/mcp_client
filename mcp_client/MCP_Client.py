@@ -366,4 +366,33 @@ class UniversalMCPClient:
         """Get information about a server"""
         return self._servers.get(server_name)
     
+    async def _close_server_internal(self, server_info: ServerInfo) -> None:
+        """Internal method to close a server - must be called from same task context"""
+        if server_info.is_closed:
+            return
+        
+        server_info._closed = True
+        logger.info(f"🔌 Closing server '{server_info.name}'...")
+        
+        try:
+            # Close the stack without timeout - let it complete naturally
+            await server_info.stack.aclose()
+            logger.info(f"✅ Server '{server_info.name}' closed")
+        except Exception as e:
+            logger.warning(f"⚠️  Error closing '{server_info.name}': {e}")
+    
+    async def close_server(self, server_name: str) -> None:
+        """
+        Close a specific server
+        
+        Args:
+            server_name: Name of the server to close
+        """
+        async with self._lock:
+            server_info = self._servers.pop(server_name, None)
+        
+        if server_info:
+            await self._close_server_internal(server_info)
+        else:
+            logger.warning(f"⚠️  Server '{server_name}' not found")
     
