@@ -395,4 +395,39 @@ class UniversalMCPClient:
             await self._close_server_internal(server_info)
         else:
             logger.warning(f"⚠️  Server '{server_name}' not found")
+    async def close_all(self) -> None:
+        """Close all servers gracefully"""
+        if self._closed:
+            return
+        
+        self._closed = True
+        
+        if not self._servers:
+            logger.info("No servers to close")
+            return
+        
+        logger.info(f"🔌 Closing {len(self._servers)} servers...")
+        
+        # Get all servers
+        async with self._lock:
+            servers = list(self._servers.values())
+            self._servers.clear()
+        
+        # Close each server sequentially in the same task context
+        for server_info in servers:
+            await self._close_server_internal(server_info)
+        
+        logger.info("✅ All servers closed")
     
+    # Context manager support (optional)
+    async def __aenter__(self):
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close_all()
+        # Don't suppress exceptions
+        return False
+
+
+
+
