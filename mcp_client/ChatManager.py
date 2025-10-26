@@ -390,3 +390,151 @@ class ChatManager:
             tool_def.to_openai_function()
             for tool_def in self.tool_definitions.values()
         ]
+    
+    async def send_message(self, user_message: str) -> str:
+        """
+        Send a message and get response (with automatic tool calling)
+        
+        Args:
+            user_message: User's message
+            
+        Returns:
+            Assistant's final response
+        """
+        # Add user message to history
+        self.conversation_history.append(
+            Message(role="user", content=user_message)
+        )
+        
+        logger.info(f"User message: {user_message}")
+        
+        # Process conversation with tool calling loop
+        final_response = await self._process_conversation_loop()
+        
+        logger.info(f"Assistant response: {final_response}")
+        
+        return final_response
+    
+    async def _process_conversation_loop(self) -> str:
+        """
+        Main conversation loop with automatic tool calling
+        
+        Returns:
+            Final assistant response
+        """
+        iteration = 0
+        
+        while iteration < self.max_iterations:
+            iteration += 1
+            logger.info(f"Conversation iteration {iteration}/{self.max_iterations}")
+            
+            # Call LLM
+            response_message = await self._call_llm()
+            
+            # Add assistant message to history
+            assistant_message = Message.from_openai_response(
+                response_message,
+                self.tool_definitions
+            )
+            self.conversation_history.append(assistant_message)
+            
+            # Check if LLM wants to call tools
+            if assistant_message.tool_calls:
+                logger.info(f"LLM requested {len(assistant_message.tool_calls)} tool calls")
+                
+                # Execute all tool calls
+                tool_results = await self._execute_tool_calls(assistant_message.tool_calls)
+                
+                # Add tool results to history
+                for result in tool_results:
+                    tool_message_dict = result.to_openai_tool_message()
+                    tool_message = Message(
+                        role="tool",
+                        content=tool_message_dict["content"],
+                        tool_call_id=tool_message_dict["tool_call_id"],
+                        name=tool_message_dict["name"]
+                    )
+                    self.conversation_history.append(tool_message)
+                
+                # Continue loop to let LLM process tool results
+                continue
+            
+            # No tool calls - we have the final response
+            if assistant_message.content:
+                return assistant_message.content
+            else:
+                # Edge case: no content and no tool calls
+                logger.warning("LLM returned no content and no tool calls")
+                return "I apologize, but I couldn't generate a response."
+        
+        # Max iterations reached
+        logger.warning(f"Max iterations ({self.max_iterations}) reached")
+        return "I apologize, but I couldn't complete the task within the allowed steps."
+    
+    async def _call_llm(self) -> Any:
+        """Call the LLM with current conversation history"""
+        # Prepare messages
+        messages = [
+            msg.to_openai_format()
+            for msg in self.conversation_history
+        ]
+        
+        # Prepare tools
+        tools = self._get_tools_for_openai()
+        
+        # Call OpenAI API
+        try:
+            response = await self.openai_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools if tools else None,
+                temperature=self.temperature
+            )
+            
+            return response.choices[0].message
+            
+        except Exception as e:
+            logger.error(f"LLM API call failed: {e}")
+            raise
+    
+    async def _execute_tool_calls(
+        self,
+        tool_calls: List[ToolCall]
+    ) -> List[ToolResult]:
+        """Execute multiple tool calls (in parallel if possible)"""
+        logger.info(f"Executing {len(tool_calls)} tool calls")
+        
+        # Execute all tool calls in parallel
+        tasks = [
+            tool_call.execute(self.mcp_client)
+            for tool_call in tool_calls
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Convert exceptions to failed ToolResults
+        final_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                tool_call = tool_calls[i]
+                final_results.append(
+                    ToolResult(
+                        tool_call_id=tool_call.id,
+                        server_name=tool_call.server_name,
+                        tool_name=tool_call.tool_name,
+                        result=None,
+                        success=False,
+                        error=str(result)
+                    )
+                )
+            else:
+                final_results.append(result)
+        
+        # Log results
+        for result in final_results:
+            if result.success:
+                logger.info(f"✅ {result.server_name}.{result.tool_name} succeeded")
+            else:
+                logger.error(f"❌ {result.server_name}.{result.tool_name} failed: {result.error}")
+        
+        return final_results
