@@ -538,3 +538,28 @@ class ChatManager:
                 logger.error(f"❌ {result.server_name}.{result.tool_name} failed: {result.error}")
         
         return final_results
+    
+    def get_history(self) -> List[Message]:
+        """Get conversation history"""
+        return self.conversation_history.copy()
+    
+    def clear_history(self):
+        """Clear conversation history (keeps system prompt)"""
+        self.conversation_history = []
+        if self.system_prompt:
+            self.conversation_history.append(
+                Message(role="system", content=self.system_prompt)
+            )
+        logger.info("Conversation history cleared")
+    
+    def add_system_message(self, content: str):
+        """Add a system message to the conversation"""
+        self.conversation_history.append(
+            Message(role="system", content=content)
+        )
+        logger.info(f"System message added: {content}")
+    
+    def refresh_tools(self):
+        """Refresh tool definitions from MCP client"""
+        logger.info("Refreshing tool definitions")
+        self._build_tools_schema()
