@@ -95,3 +95,100 @@ class ToolCall:
                 success=False,
                 error=str(e)
             )
+
+
+@dataclass
+class ToolResult:
+    """Represents the result of a tool execution"""
+    tool_call_id: str
+    server_name: str
+    tool_name: str
+    result: Any
+    success: bool
+    error: Optional[str] = None
+    
+    def _serialize_result(self, result: Any) -> str:
+        """Serialize MCP result to JSON string
+        
+        Handles various MCP result types:
+        - CallToolResult objects
+        - Plain dicts/lists
+        - Strings
+        - Complex objects
+        """
+        try:
+            if isinstance(result, str):
+                return result
+            
+            if hasattr(result, 'content'):
+                content_items = []
+                for item in result.content:
+                    if hasattr(item, 'type'):
+                        # TextContent
+                        if item.type == 'text':
+                            content_items.append({
+                                'type': 'text',
+                                'text': item.text
+                            })
+                        # ImageContent
+                        elif item.type == 'image':
+                            content_items.append({
+                                'type': 'image',
+                                'data': item.data,
+                                'mimeType': item.mimeType
+                            })
+                        # ResourceContent
+                        elif item.type == 'resource':
+                            content_items.append({
+                                'type': 'resource',
+                                'resource': {
+                                    'uri': item.resource.uri,
+                                    'mimeType': getattr(item.resource, 'mimeType', None),
+                                    'text': getattr(item.resource, 'text', None)
+                                }
+                            })
+                    else:
+                        # Fallback pour types inconnus
+                        content_items.append({'data': str(item)})
+                
+                # Construire le résultat final
+                result_dict = {
+                    'content': content_items,
+                    'isError': getattr(result, 'isError', False)
+                }
+                
+                return json.dumps(result_dict, ensure_ascii=False)
+            
+            if isinstance(result, (dict, list, int, float, bool, type(None))):
+                return json.dumps(result, ensure_ascii=False)
+            
+            if hasattr(result, '__dict__'):
+                return json.dumps(result.__dict__, ensure_ascii=False, default=str)
+            
+            return json.dumps({'result': str(result)}, ensure_ascii=False)
+            
+        except Exception as e:
+            logger.error(f"Failed to serialize result: {e}")
+            # Retourner une erreur sérialisable
+            return json.dumps({
+                'error': 'Serialization failed',
+                'message': str(e),
+                'result_type': type(result).__name__
+            }, ensure_ascii=False)
+    
+    def to_openai_tool_message(self) -> Dict[str, Any]:
+        """Convert to OpenAI tool message format"""
+        if self.success:
+            content = self._serialize_result(self.result)
+        else:
+            content = json.dumps({
+                "error": self.error,
+                "message": f"Tool {self.tool_name} failed"
+            }, ensure_ascii=False)
+        
+        return {
+            "role": "tool",
+            "tool_call_id": self.tool_call_id,
+            "name": f"{self.server_name}__{self.tool_name}",
+            "content": content
+        }
