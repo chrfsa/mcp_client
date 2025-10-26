@@ -465,13 +465,12 @@ async def main():
     print("\n🌤️  Fetching weather alerts for CA...")
     result = await client.call_tool("weather", "get_alerts", {"state": "CA"})
     
-    # Print first alert only to keep output manageable
-    if result and result.content:
-        content = result.content[0].text if hasattr(result.content[0], 'text') else str(result.content[0])
-        first_alert = content.split('\n---\n')[0] if '\n---\n' in content else content[:500]
-        print(f"\n{first_alert}\n")
-    
-
+    print(result)
+    await client.close_server("deepwiki")
+    servers = client.list_servers()
+    print(f"\n📋 Available servers:")
+    for server_name in servers:
+        print(f"  {server_name}")
     await client.close_all()
 
 
