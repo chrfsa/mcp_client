@@ -293,3 +293,100 @@ class Message:
             content=response_message.content,
             tool_calls=tool_calls
         )
+
+
+# ============================================================================
+# MAIN CHAT MANAGER
+# ============================================================================
+
+class ChatManager:
+    """
+    Manages LLM conversations with automatic MCP tool integration
+    
+    Example:
+        mcp_client = UniversalMCPClient()
+        await mcp_client.add_servers([...])
+        
+        chat = ChatManager(
+            mcp_client=mcp_client,
+            model="anthropic/claude-3.5-sonnet",
+            api_key="your-openrouter-key"
+        )
+        
+        response = await chat.send_message("What's the weather in Paris?")
+        print(response)
+    """
+    
+    def __init__(
+        self,
+        mcp_client: UniversalMCPClient,
+        model: str = "anthropic/claude-3.5-sonnet",
+        api_key: Optional[str] = None,
+        base_url: str = "https://openrouter.ai/api/v1",
+        system_prompt: Optional[str] = None,
+        max_iterations: int = 10,
+        temperature: float = 0.7
+    ):
+        """
+        Initialize ChatManager
+        
+        Args:
+            mcp_client: Initialized UniversalMCPClient with connected servers
+            model: Model name (OpenRouter format)
+            api_key: OpenRouter API key
+            base_url: API base URL (default: OpenRouter)
+            system_prompt: Optional system prompt
+            max_iterations: Max tool call iterations to prevent infinite loops
+            temperature: LLM temperature (0-1)
+        """
+        self.mcp_client = mcp_client
+        self.model = model
+        self.max_iterations = max_iterations
+        self.temperature = temperature
+        
+        # Initialize OpenAI client for OpenRouter
+        self.openai_client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
+        
+        # Conversation state
+        self.conversation_history: List[Message] = []
+        self.system_prompt = system_prompt or (
+            "You are a helpful assistant with access to various tools. "
+            "Use the available tools when needed to answer user questions accurately."
+        )
+        
+        # Add system message
+        if self.system_prompt:
+            self.conversation_history.append(
+                Message(role="system", content=self.system_prompt)
+            )
+        
+        # Build tool definitions
+        self.tool_definitions: Dict[str, ToolDefinition] = {}
+        self._build_tools_schema()
+        
+        logger.info(f"ChatManager initialized with model {model}")
+        logger.info(f"Available tools: {len(self.tool_definitions)}")
+    
+    def _build_tools_schema(self):
+        """Build tool definitions from MCP client"""
+        self.tool_definitions.clear()
+        
+        # Get all tools from all servers
+        all_tools = self.mcp_client.list_tools()
+        
+        for server_name, tools in all_tools.items():
+            for mcp_tool in tools:
+                tool_def = ToolDefinition.from_mcp_tool(server_name, mcp_tool)
+                self.tool_definitions[tool_def.full_name] = tool_def
+        
+        logger.info(f"Built {len(self.tool_definitions)} tool definitions")
+    
+    def _get_tools_for_openai(self) -> List[Dict[str, Any]]:
+        """Get tools in OpenAI format"""
+        return [
+            tool_def.to_openai_function()
+            for tool_def in self.tool_definitions.values()
+        ]
