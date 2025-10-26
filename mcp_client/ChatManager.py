@@ -563,3 +563,52 @@ class ChatManager:
         """Refresh tool definitions from MCP client"""
         logger.info("Refreshing tool definitions")
         self._build_tools_schema()
+
+
+# ============================================================================
+# EXAMPLE USAGE
+# ============================================================================
+async def main():
+    """Test du chat avec gestion propre du cleanup"""
+    
+    # Setup MCP
+    mcp_client = UniversalMCPClient()
+    
+    async with mcp_client as mcp_client:
+        await mcp_client.add_servers([
+            ServerConfig(
+                name="deepwiki",
+                transport="sse",
+                url="https://mcp.deepwiki.com/sse"
+            )
+        ], fail_fast=False)
+        print(f"Current task: {asyncio.current_task()}")
+        # Setup Chat
+        chat = ChatManager(
+            mcp_client=mcp_client,
+            model="anthropic/claude-3.5-sonnet",
+            api_key=os.getenv("OPENROUTER_API_KEY")
+        )
+        print(f"ChatManager initialized with model {chat.tool_definitions}")
+        # Conversation
+        print("\n" + "=" * 60)
+        print("CHAT SESSION")
+        print("=" * 60)
+        
+        response = await chat.send_message("stp utiliser l'outil et dit moi la structure de depos langgraph sur github stp ")
+        print(f"Current task: {asyncio.current_task()}")
+        print(f"\n[ASSISTANT] {response}")
+        
+        # Afficher l'historique
+        print("\n" + "=" * 60)
+        print("CONVERSATION HISTORY")
+        print("=" * 60)
+        
+        for msg in chat.get_history():
+            print(f"\n[{msg.role.upper()}] {msg.content}")
+
+
+
+if __name__ == "__main__":
+    # Utiliser asyncio.run() normalement
+    asyncio.run(main())
