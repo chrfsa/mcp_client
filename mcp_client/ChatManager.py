@@ -233,3 +233,63 @@ class ToolDefinition:
     def full_name(self) -> str:
         """Get full tool name (server__tool)"""
         return f"{self.server_name}__{self.tool_name}"
+
+
+@dataclass
+class Message:
+    """Represents a message in the conversation"""
+    role: str  # "user" | "assistant" | "system" | "tool"
+    content: Optional[str] = None
+    tool_calls: Optional[List[ToolCall]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+    timestamp: datetime = field(default_factory=datetime.utcnow)
+    
+    def to_openai_format(self) -> Dict[str, Any]:
+        """Convert to OpenAI message format"""
+        message = {"role": self.role}
+        
+        if self.content is not None:
+            message["content"] = self.content
+        
+        if self.tool_calls:
+            message["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": f"{tc.server_name}__{tc.tool_name}",
+                        "arguments": json.dumps(tc.arguments)
+                    }
+                }
+                for tc in self.tool_calls
+            ]
+        
+        if self.tool_call_id:
+            message["tool_call_id"] = self.tool_call_id
+        
+        if self.name:
+            message["name"] = self.name
+        
+        return message
+    
+    @classmethod
+    def from_openai_response(
+        cls,
+        response_message: Any,
+        tool_definitions: Dict[str, ToolDefinition]
+    ) -> 'Message':
+        """Create message from OpenAI response"""
+        tool_calls = None
+        
+        if hasattr(response_message, 'tool_calls') and response_message.tool_calls:
+            tool_calls = [
+                ToolCall.from_openai_tool_call(tc, tool_definitions)
+                for tc in response_message.tool_calls
+            ]
+        
+        return cls(
+            role=response_message.role,
+            content=response_message.content,
+            tool_calls=tool_calls
+        )
