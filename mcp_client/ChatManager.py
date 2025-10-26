@@ -192,3 +192,44 @@ class ToolResult:
             "name": f"{self.server_name}__{self.tool_name}",
             "content": content
         }
+
+@dataclass
+class ToolDefinition:
+    """Represents a tool definition in OpenAI format"""
+    server_name: str
+    tool_name: str
+    description: str
+    parameters: Dict[str, Any]
+    
+    @classmethod
+    def from_mcp_tool(cls, server_name: str, mcp_tool: MCPTool) -> 'ToolDefinition':
+        """Convert MCP tool to OpenAI tool definition"""
+        # MCP tools already use JSON Schema format
+        parameters = mcp_tool.inputSchema if hasattr(mcp_tool, 'inputSchema') else {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+        
+        return cls(
+            server_name=server_name,
+            tool_name=mcp_tool.name,
+            description=mcp_tool.description or f"Tool {mcp_tool.name} from {server_name}",
+            parameters=parameters
+        )
+    
+    def to_openai_function(self) -> Dict[str, Any]:
+        """Convert to OpenAI function calling format"""
+        return {
+            "type": "function",
+            "function": {
+                "name": f"{self.server_name}__{self.tool_name}",
+                "description": self.description,
+                "parameters": self.parameters
+            }
+        }
+    
+    @property
+    def full_name(self) -> str:
+        """Get full tool name (server__tool)"""
+        return f"{self.server_name}__{self.tool_name}"
