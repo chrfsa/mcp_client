@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 dotenv.load_dotenv()
 from models import (
     ServerConfigRequest, ServerResponse,
-    ToolResponse, ChatRequest, ChatResponse
+    ToolResponse, ChatRequest, ChatResponse,
+    ToolInfo
 )
 from MCP_Client import UniversalMCPClient, ServerConfig
 from ChatManager import ChatManager, Message
@@ -192,7 +193,11 @@ async def add_servers(configs: List[ServerConfigRequest], db: Session = Depends(
                     name=result.name,
                     transport=result.config.transport,
                     tools_count=len(result.tools),
-                    tools=[t.name for t in result.tools],
+                    tools=[ToolInfo(
+                        name=t.name,
+                        description=t.description,
+                        input_schema=t.inputSchema
+                    ) for t in result.tools],
                     connected_at=result.connected_at
                 ))
         
@@ -224,7 +229,11 @@ async def list_servers():
                 name=server_info.name,
                 transport=server_info.config.transport,
                 tools_count=len(server_info.tools),
-                tools=[t.name for t in server_info.tools],
+                tools=[ToolInfo(
+                    name=t.name,
+                    description=t.description,
+                    input_schema=t.inputSchema
+                ) for t in server_info.tools],
                 connected_at=server_info.connected_at
             ))
     

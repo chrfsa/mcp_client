@@ -17,12 +17,19 @@ class ServerConfigRequest(BaseModel):
     timeout: Optional[float] = None
 
 
+class ToolInfo(BaseModel):
+    """Info détaillée d'un tool"""
+    name: str
+    description: Optional[str] = None
+    input_schema: Optional[Dict[str, Any]] = None
+
+
 class ServerResponse(BaseModel):
     """Info serveur"""
     name: str
     transport: str
     tools_count: int
-    tools: List[str]
+    tools: List[ToolInfo]
     connected_at: datetime
 
 
