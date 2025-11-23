@@ -10,11 +10,17 @@ export interface ServerConfig {
     timeout?: number;
 }
 
+export interface ToolInfo {
+    name: string;
+    description?: string;
+    input_schema?: any;
+}
+
 export interface ServerResponse {
     name: string;
     transport: string;
     tools_count: number;
-    tools: string[];
+    tools: ToolInfo[];
     connected_at: string;
 }
 

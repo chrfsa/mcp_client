@@ -380,8 +380,12 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                                 {server.tools && server.tools.length > 0 ? (
                                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                                         {server.tools.map((tool) => (
-                                                            <div key={tool} className="bg-background border rounded px-2 py-1 font-mono text-xs text-muted-foreground">
-                                                                {tool}
+                                                            <div
+                                                                key={tool.name}
+                                                                className="bg-background border rounded px-2 py-1 font-mono text-xs text-muted-foreground cursor-help relative group/tooltip"
+                                                                title={`${tool.description || 'No description'}\n\nArguments:\n${tool.input_schema ? JSON.stringify(tool.input_schema, null, 2) : 'None'}`}
+                                                            >
+                                                                {tool.name}
                                                             </div>
                                                         ))}
                                                     </div>
