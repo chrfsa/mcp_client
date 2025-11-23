@@ -18,6 +18,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         transport: 'stdio',
         name: '',
     });
+    const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
 
     useEffect(() => {
         if (isOpen) {
@@ -53,17 +54,35 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             // Parse args if string
             const configToAdd: ServerConfig = {
                 ...newServer as ServerConfig,
-                args: typeof newServer.args === 'string' ? (newServer.args as string).split(' ') : newServer.args
+                args: typeof newServer.args === 'string' ? (newServer.args as string).split(' ') : newServer.args,
+                env: envVars.length > 0
+                    ? envVars.reduce((acc, curr) => curr.key ? ({ ...acc, [curr.key]: curr.value }) : acc, {})
+                    : undefined
             };
 
             await mcpApi.addServers([configToAdd]);
             await loadServers();
             setNewServer({ transport: 'stdio', name: '' }); // Reset form
+            setEnvVars([]);
         } catch (err: any) {
             setError(err.message || 'Failed to add server');
         } finally {
             setIsLoading(false);
         }
+    };
+
+    const handleAddEnvVar = () => {
+        setEnvVars([...envVars, { key: '', value: '' }]);
+    };
+
+    const handleRemoveEnvVar = (index: number) => {
+        setEnvVars(envVars.filter((_, i) => i !== index));
+    };
+
+    const handleEnvVarChange = (index: number, field: 'key' | 'value', value: string) => {
+        const newEnvVars = [...envVars];
+        newEnvVars[index][field] = value;
+        setEnvVars(newEnvVars);
     };
 
     const handleRemoveServer = async (name: string) => {
@@ -132,28 +151,69 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             </div>
 
                             {newServer.transport === 'stdio' ? (
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-sm font-medium mb-1">Command</label>
-                                        <input
-                                            type="text"
-                                            value={newServer.command || ''}
-                                            onChange={e => setNewServer({ ...newServer, command: e.target.value })}
-                                            className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none font-mono text-sm"
-                                            placeholder="e.g., python, npx"
-                                        />
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Command</label>
+                                            <input
+                                                type="text"
+                                                value={newServer.command || ''}
+                                                onChange={e => setNewServer({ ...newServer, command: e.target.value })}
+                                                className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none font-mono text-sm"
+                                                placeholder="e.g., python, npx"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Arguments</label>
+                                            <input
+                                                type="text"
+                                                value={Array.isArray(newServer.args) ? newServer.args.join(' ') : newServer.args || ''}
+                                                onChange={e => setNewServer({ ...newServer, args: e.target.value.split(' ') })}
+                                                className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none font-mono text-sm"
+                                                placeholder="e.g., script.py --flag"
+                                            />
+                                        </div>
                                     </div>
-                                    <div>
-                                        <label className="block text-sm font-medium mb-1">Arguments</label>
-                                        <input
-                                            type="text"
-                                            value={Array.isArray(newServer.args) ? newServer.args.join(' ') : newServer.args || ''}
-                                            onChange={e => setNewServer({ ...newServer, args: e.target.value.split(' ') })}
-                                            className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none font-mono text-sm"
-                                            placeholder="e.g., script.py --flag"
-                                        />
+
+                                    <div className="space-y-2">
+                                        <label className="block text-sm font-medium">Environment Variables</label>
+                                        <div className="space-y-2">
+                                            {envVars.map((env, index) => (
+                                                <div key={index} className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Key"
+                                                        value={env.key}
+                                                        onChange={(e) => handleEnvVarChange(index, 'key', e.target.value)}
+                                                        className="flex-1 bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none text-sm font-mono"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Value"
+                                                        value={env.value}
+                                                        onChange={(e) => handleEnvVarChange(index, 'value', e.target.value)}
+                                                        className="flex-1 bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none text-sm font-mono"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveEnvVar(index)}
+                                                        className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+                                                        title="Remove variable"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                onClick={handleAddEnvVar}
+                                                className="text-sm text-primary hover:underline flex items-center gap-1"
+                                            >
+                                                <Plus size={14} /> Add Environment Variable
+                                            </button>
+                                        </div>
                                     </div>
-                                </div>
+                                </>
                             ) : (
                                 <div>
                                     <label className="block text-sm font-medium mb-1">URL</label>
