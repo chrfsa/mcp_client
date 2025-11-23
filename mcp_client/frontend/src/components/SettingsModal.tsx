@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Trash2, Plus, Save, Server, Terminal, Globe, AlertCircle, X } from 'lucide-react';
+import { Trash2, Plus, Save, Server, Terminal, Globe, AlertCircle, X, ChevronDown, ChevronRight, Wrench } from 'lucide-react';
 import { mcpApi } from '../lib/api';
 import type { ServerConfig, ServerResponse } from '../types';
 
@@ -20,6 +20,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
     });
     const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
     const [headers, setHeaders] = useState<{ key: string; value: string }[]>([]);
+    const [expandedServers, setExpandedServers] = useState<Set<string>>(new Set());
 
     useEffect(() => {
         if (isOpen) {
@@ -102,6 +103,16 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const newHeaders = [...headers];
         newHeaders[index][field] = value;
         setHeaders(newHeaders);
+    };
+
+    const toggleServerExpansion = (serverName: string) => {
+        const newExpanded = new Set(expandedServers);
+        if (newExpanded.has(serverName)) {
+            newExpanded.delete(serverName);
+        } else {
+            newExpanded.add(serverName);
+        }
+        setExpandedServers(newExpanded);
     };
 
     const handleRemoveServer = async (name: string) => {
@@ -328,29 +339,57 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 </div>
                             ) : (
                                 servers.map(server => (
-                                    <div key={server.name} className="bg-card border rounded-lg p-4 flex items-center justify-between shadow-sm group hover:border-primary/50 transition-colors">
-                                        <div className="flex items-center gap-4">
-                                            <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground">
-                                                {server.transport === 'stdio' ? <Terminal size={20} /> : <Globe size={20} />}
-                                            </div>
-                                            <div>
-                                                <h3 className="font-semibold">{server.name}</h3>
-                                                <div className="text-sm text-muted-foreground flex gap-3">
-                                                    <span className="uppercase text-xs font-bold bg-muted px-1.5 py-0.5 rounded">
-                                                        {server.transport}
-                                                    </span>
-                                                    <span>{server.tools_count} tools available</span>
+                                    <div key={server.name} className="bg-card border rounded-lg shadow-sm group hover:border-primary/50 transition-colors overflow-hidden">
+                                        <div className="p-4 flex items-center justify-between">
+                                            <div className="flex items-center gap-4">
+                                                <div className="w-10 h-10 rounded-full bg-secondary flex items-center justify-center text-secondary-foreground">
+                                                    {server.transport === 'stdio' ? <Terminal size={20} /> : <Globe size={20} />}
+                                                </div>
+                                                <div>
+                                                    <h3 className="font-semibold">{server.name}</h3>
+                                                    <div className="text-sm text-muted-foreground flex gap-3">
+                                                        <span className="uppercase text-xs font-bold bg-muted px-1.5 py-0.5 rounded">
+                                                            {server.transport}
+                                                        </span>
+                                                        <button
+                                                            onClick={() => toggleServerExpansion(server.name)}
+                                                            className="hover:text-primary flex items-center gap-1 transition-colors"
+                                                        >
+                                                            <span>{server.tools_count} tools available</span>
+                                                            {expandedServers.has(server.name) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
+
+                                            <button
+                                                onClick={() => handleRemoveServer(server.name)}
+                                                className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+                                                title="Remove Server"
+                                            >
+                                                <Trash2 size={18} />
+                                            </button>
                                         </div>
 
-                                        <button
-                                            onClick={() => handleRemoveServer(server.name)}
-                                            className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors opacity-0 group-hover:opacity-100"
-                                            title="Remove Server"
-                                        >
-                                            <Trash2 size={18} />
-                                        </button>
+                                        {/* Tools List */}
+                                        {expandedServers.has(server.name) && (
+                                            <div className="bg-muted/30 border-t p-3 pl-16 text-sm">
+                                                <h4 className="font-medium mb-2 flex items-center gap-2 text-muted-foreground">
+                                                    <Wrench size={14} /> Available Tools
+                                                </h4>
+                                                {server.tools && server.tools.length > 0 ? (
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                                        {server.tools.map((tool) => (
+                                                            <div key={tool} className="bg-background border rounded px-2 py-1 font-mono text-xs text-muted-foreground">
+                                                                {tool}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="text-muted-foreground italic">No tools listed</div>
+                                                )}
+                                            </div>
+                                        )}
                                     </div>
                                 ))
                             )}

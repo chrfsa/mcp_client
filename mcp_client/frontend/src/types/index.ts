@@ -14,6 +14,7 @@ export interface ServerResponse {
     name: string;
     transport: string;
     tools_count: number;
+    tools: string[];
     connected_at: string;
 }
 
