@@ -19,6 +19,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         name: '',
     });
     const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
+    const [headers, setHeaders] = useState<{ key: string; value: string }[]>([]);
 
     useEffect(() => {
         if (isOpen) {
@@ -57,6 +58,9 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                 args: typeof newServer.args === 'string' ? (newServer.args as string).split(' ') : newServer.args,
                 env: envVars.length > 0
                     ? envVars.reduce((acc, curr) => curr.key ? ({ ...acc, [curr.key]: curr.value }) : acc, {})
+                    : undefined,
+                headers: headers.length > 0
+                    ? headers.reduce((acc, curr) => curr.key ? ({ ...acc, [curr.key]: curr.value }) : acc, {})
                     : undefined
             };
 
@@ -64,6 +68,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
             await loadServers();
             setNewServer({ transport: 'stdio', name: '' }); // Reset form
             setEnvVars([]);
+            setHeaders([]);
         } catch (err: any) {
             setError(err.message || 'Failed to add server');
         } finally {
@@ -83,6 +88,20 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
         const newEnvVars = [...envVars];
         newEnvVars[index][field] = value;
         setEnvVars(newEnvVars);
+    };
+
+    const handleAddHeader = () => {
+        setHeaders([...headers, { key: '', value: '' }]);
+    };
+
+    const handleRemoveHeader = (index: number) => {
+        setHeaders(headers.filter((_, i) => i !== index));
+    };
+
+    const handleHeaderChange = (index: number, field: 'key' | 'value', value: string) => {
+        const newHeaders = [...headers];
+        newHeaders[index][field] = value;
+        setHeaders(newHeaders);
     };
 
     const handleRemoveServer = async (name: string) => {
@@ -216,14 +235,67 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                                 </>
                             ) : (
                                 <div>
-                                    <label className="block text-sm font-medium mb-1">URL</label>
-                                    <input
-                                        type="text"
-                                        value={newServer.url || ''}
-                                        onChange={e => setNewServer({ ...newServer, url: e.target.value })}
-                                        className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none"
-                                        placeholder="https://api.example.com/sse"
-                                    />
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">URL</label>
+                                            <input
+                                                type="text"
+                                                value={newServer.url || ''}
+                                                onChange={e => setNewServer({ ...newServer, url: e.target.value })}
+                                                className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none"
+                                                placeholder="https://api.example.com/sse"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium mb-1">Timeout (seconds)</label>
+                                            <input
+                                                type="number"
+                                                value={newServer.timeout || ''}
+                                                onChange={e => setNewServer({ ...newServer, timeout: e.target.value ? parseFloat(e.target.value) : undefined })}
+                                                className="w-full bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none"
+                                                placeholder="e.g., 30"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <label className="block text-sm font-medium">Headers</label>
+                                        <div className="space-y-2">
+                                            {headers.map((header, index) => (
+                                                <div key={index} className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Key"
+                                                        value={header.key}
+                                                        onChange={(e) => handleHeaderChange(index, 'key', e.target.value)}
+                                                        className="flex-1 bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none text-sm font-mono"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Value"
+                                                        value={header.value}
+                                                        onChange={(e) => handleHeaderChange(index, 'value', e.target.value)}
+                                                        className="flex-1 bg-background border rounded-md px-3 py-2 focus:ring-2 focus:ring-primary/50 outline-none text-sm font-mono"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleRemoveHeader(index)}
+                                                        className="p-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-colors"
+                                                        title="Remove header"
+                                                    >
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                onClick={handleAddHeader}
+                                                className="text-sm text-primary hover:underline flex items-center gap-1"
+                                            >
+                                                <Plus size={14} /> Add Header
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             )}
 
