@@ -22,6 +22,7 @@ class ServerResponse(BaseModel):
     name: str
     transport: str
     tools_count: int
+    tools: List[str]
     connected_at: datetime
 
 
