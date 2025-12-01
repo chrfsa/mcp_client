@@ -137,7 +137,15 @@ class UniversalMCPClient:
         
         async with self._lock:
             if config.name in self._servers:
-                raise ValueError(f"Server '{config.name}' already exists")
+                # If already exists, check if active. If so, return it.
+                # If closed, remove and reconnect.
+                existing = self._servers[config.name]
+                if not existing.is_closed:
+                    logger.info(f"Server '{config.name}' already connected.")
+                    return existing
+                else:
+                    await self._close_server_internal(existing)
+                    del self._servers[config.name]
         
         # Try to connect (with retries)
         last_error = None
@@ -395,6 +403,11 @@ class UniversalMCPClient:
             await self._close_server_internal(server_info)
         else:
             logger.warning(f"⚠️  Server '{server_name}' not found")
+
+    async def disconnect_all(self) -> None:
+        """Alias for close_all"""
+        await self.close_all()
+
     async def close_all(self) -> None:
         """Close all servers gracefully"""
         if self._closed:
@@ -427,6 +440,7 @@ class UniversalMCPClient:
         await self.close_all()
         # Don't suppress exceptions
         return False
+
 async def main():
     """Example usage"""
     # Configure logging
@@ -438,39 +452,9 @@ async def main():
     # Create client
     client = UniversalMCPClient()
     
+    # Example config
+    # await client.add_servers([...])
     
-    await client.add_servers([ServerConfig(
-        name="weather",
-        transport="stdio",
-        command="python",
-        args=["/home/said/Bureau/MCP/weather/weather.py"],
-    ),ServerConfig(
-        name="deepwiki",
-        transport="sse",
-        url="https://mcp.deepwiki.com/sse",
-    ),ServerConfig(
-        name="firecrawl",
-        transport="stdio",
-        command="npx",
-        args=["-y", "firecrawl-mcp"],
-    )])
-    
-    # List tools
-    tools = client.list_tools()
-    print(f"\n📋 Available tools:")
-    for server_name, server_tools in tools.items():
-        print(f"  {server_name}: {[t.name for t in server_tools]}")
-    
-    # Call tool
-    print("\n🌤️  Fetching weather alerts for CA...")
-    result = await client.call_tool("weather", "get_alerts", {"state": "CA"})
-    
-    print(result)
-    await client.close_server("deepwiki")
-    servers = client.list_servers()
-    print(f"\n📋 Available servers:")
-    for server_name in servers:
-        print(f"  {server_name}")
     await client.close_all()
 
 
