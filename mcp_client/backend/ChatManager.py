@@ -68,6 +68,16 @@ class ToolCall:
             arguments=arguments
         )
     
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ToolCall':
+        """Reconstruct ToolCall from dict (e.g., from database)"""
+        return cls(
+            id=data.get('id', ''),
+            server_name=data.get('server_name', ''),
+            tool_name=data.get('tool_name', ''),
+            arguments=data.get('arguments', {})
+        )
+    
     async def execute(self, mcp_client: UniversalMCPClient) -> 'ToolResult':
         """Execute this tool call via MCP client"""
         try:
@@ -402,6 +412,220 @@ class ChatManager:
         logger.info(f"Assistant response: {final_response}")
         
         return final_response
+    
+    async def send_message_stream(self, user_message: str):
+        """
+        Send a message and stream the response token by token
+        
+        Args:
+            user_message: User's message
+            
+        Yields:
+            Dict with 'type' and 'content' for each event:
+            - {'type': 'token', 'content': str} - Text token
+            - {'type': 'tool_call', 'content': {...}} - Tool call started
+            - {'type': 'tool_result', 'content': {...}} - Tool result
+            - {'type': 'done', 'content': str} - Final message
+        """
+        # Add user message to history
+        self.conversation_history.append(
+            Message(role="user", content=user_message)
+        )
+        
+        logger.info(f"User message (streaming): {user_message}")
+        
+        # Process conversation with tool calling loop (streaming)
+        async for event in self._process_conversation_loop_stream():
+            yield event
+    
+    async def _process_conversation_loop_stream(self):
+        """Main conversation loop with streaming support"""
+        iteration = 0
+        logger.info("🚀 Starting streaming conversation loop")
+        
+        while iteration < self.max_iterations:
+            iteration += 1
+            logger.info(f"Conversation iteration {iteration}/{self.max_iterations}")
+            
+            # Call LLM with streaming
+            full_content = ""
+            tool_calls_data = []
+            
+            async for chunk in self._call_llm_stream():
+                if chunk.get('type') == 'content':
+                    # Stream text tokens
+                    token = chunk.get('content', '')
+                    full_content += token
+                    yield {'type': 'token', 'content': token}
+                elif chunk.get('type') == 'tool_call':
+                    # Tool call being built
+                    tool_calls_data.append(chunk.get('data'))
+            
+            # If we have tool calls, execute them
+            if tool_calls_data:
+                # Parse tool calls
+                tool_calls = []
+                for tc_data in tool_calls_data:
+                    try:
+                        tool_call = ToolCall.from_openai_tool_call(
+                            tc_data,
+                            self.tool_definitions
+                        )
+                        tool_calls.append(tool_call)
+                    except Exception as e:
+                        logger.error(f"Failed to parse tool call: {e}")
+                
+                # Add assistant message with tool calls to history
+                assistant_message = Message(
+                    role="assistant",
+                    content=full_content if full_content else None,
+                    tool_calls=tool_calls
+                )
+                self.conversation_history.append(assistant_message)
+                
+                # Notify about tool calls
+                for tc in tool_calls:
+                    yield {
+                        'type': 'tool_call',
+                        'content': {
+                            'server': tc.server_name,
+                            'tool': tc.tool_name,
+                            'arguments': tc.arguments
+                        }
+                    }
+                
+                # Execute tools
+                tool_results = await self._execute_tool_calls(tool_calls)
+                
+                # Add tool results to history and yield them
+                for result in tool_results:
+                    tool_message_dict = result.to_openai_tool_message()
+                    tool_message = Message(
+                        role="tool",
+                        content=tool_message_dict["content"],
+                        tool_call_id=tool_message_dict["tool_call_id"],
+                        name=tool_message_dict["name"]
+                    )
+                    self.conversation_history.append(tool_message)
+                    
+                    
+                    # Serialize the result properly for JSON
+                    result_content = result._serialize_result(result.result) if result.success else result.error
+                    
+                    yield {
+                        'type': 'tool_result',
+                        'content': {
+                            'server': result.server_name,
+                            'tool': result.tool_name,
+                            'success': result.success,
+                            'result': result_content
+                        }
+                    }
+                
+                # Continue loop to process tool results
+                continue
+            
+            # No tool calls - we have the final response
+            if full_content:
+                # Add final assistant message to history
+                assistant_message = Message(
+                    role="assistant",
+                    content=full_content
+                )
+                self.conversation_history.append(assistant_message)
+                
+                yield {'type': 'done', 'content': full_content}
+                return
+            else:
+                logger.warning("LLM returned no content and no tool calls")
+                yield {'type': 'done', 'content': "I apologize, but I couldn't generate a response."}
+                return
+        
+        # Max iterations reached
+        logger.warning(f"Max iterations ({self.max_iterations}) reached")
+        yield {'type': 'done', 'content': "I apologize, but I couldn't complete the task within the allowed steps."}
+    
+    async def _call_llm_stream(self):
+        """Call the LLM with streaming enabled"""
+        # Prepare messages
+        messages = [
+            msg.to_openai_format()
+            for msg in self.conversation_history
+        ]
+        
+        # Prepare tools
+        tools = self._get_tools_for_openai()
+        
+        logger.info(f"🔄 Starting LLM stream with {len(messages)} messages and {len(tools)} tools")
+        
+        # Call OpenAI API with streaming
+        try:
+            stream = await self.openai_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                tools=tools if tools else None,
+                temperature=self.temperature,
+                stream=True
+            )
+            
+            tool_calls_buffer = {}
+            token_count = 0
+            
+            async for chunk in stream:
+                delta = chunk.choices[0].delta
+                
+                # Handle content tokens
+                if delta.content:
+                    token_count += 1
+                    if token_count <= 5 or token_count % 50 == 0:
+                        logger.debug(f"📝 Token {token_count}: {delta.content[:20]}...")
+                    yield {'type': 'content', 'content': delta.content}
+                
+                # Handle tool calls
+                if delta.tool_calls:
+                    for tc_delta in delta.tool_calls:
+                        idx = tc_delta.index
+                        if idx not in tool_calls_buffer:
+                            logger.info(f"🔧 Tool call started at index {idx}")
+                            tool_calls_buffer[idx] = {
+                                'id': tc_delta.id or '',
+                                'type': 'function',
+                                'function': {
+                                    'name': '',
+                                    'arguments': ''
+                                }
+                            }
+                        
+                        if tc_delta.id:
+                            tool_calls_buffer[idx]['id'] = tc_delta.id
+                        if tc_delta.function:
+                            if tc_delta.function.name:
+                                tool_calls_buffer[idx]['function']['name'] += tc_delta.function.name
+                            if tc_delta.function.arguments:
+                                tool_calls_buffer[idx]['function']['arguments'] += tc_delta.function.arguments
+            
+            logger.info(f"📊 Stream complete: {token_count} tokens, {len(tool_calls_buffer)} tool calls")
+            
+            # Yield completed tool calls
+            for tc in tool_calls_buffer.values():
+                logger.info(f"🔧 Yielding tool call: {tc['function']['name']}")
+                # Create a mock object similar to OpenAI's tool call structure
+                class MockToolCall:
+                    def __init__(self, data):
+                        self.id = data['id']
+                        self.type = data['type']
+                        self.function = type('obj', (object,), {
+                            'name': data['function']['name'],
+                            'arguments': data['function']['arguments']
+                        })()
+                
+                yield {'type': 'tool_call', 'data': MockToolCall(tc)}
+                
+        except Exception as e:
+            logger.error(f"LLM streaming API call failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
     
     async def _process_conversation_loop(self) -> str:
         """

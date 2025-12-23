@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from typing import List, Optional
 import logging
@@ -18,7 +19,7 @@ from models import (
     ToolInfo
 )
 from MCP_Client import UniversalMCPClient, ServerConfig
-from ChatManager import ChatManager, Message
+from ChatManager import ChatManager, Message, ToolCall
 from database import get_db, init_db, ServerConfigModel, SessionModel, MessageModel
 
 # Logging
@@ -96,6 +97,28 @@ async def log_requests(request: Request, call_next):
 # HELPERS
 # ============================================================================
 
+def reconstruct_message_from_db(msg) -> Message:
+    """
+    Properly reconstruct a Message object from database record.
+    This ensures tool_calls and tool_call_id are correctly set.
+    """
+    # Reconstruct tool_calls list if present
+    tool_calls = None
+    if msg.tool_calls:
+        tool_calls = [
+            ToolCall.from_dict(tc) for tc in msg.tool_calls
+        ]
+    
+    return Message(
+        role=msg.role,
+        content=msg.content,
+        tool_calls=tool_calls,
+        tool_call_id=msg.tool_call_id,
+        name=msg.name,
+        timestamp=msg.timestamp
+    )
+
+
 def get_chat_manager(session_id: str, db: Session) -> ChatManager:
     """Reconstruct ChatManager for a specific session"""
     # Get session history from DB
@@ -103,18 +126,7 @@ def get_chat_manager(session_id: str, db: Session) -> ChatManager:
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    history = []
-    for msg in db_session.messages:
-        history.append(Message(
-            role=msg.role,
-            content=msg.content,
-            tool_calls=[
-                # Reconstruct tool calls if needed (simplified for now)
-            ] if msg.tool_calls else None,
-            tool_call_id=msg.tool_call_id,
-            name=msg.name,
-            timestamp=msg.timestamp
-        ))
+    history = [reconstruct_message_from_db(msg) for msg in db_session.messages]
     
     return ChatManager(
         mcp_client=mcp_client,
@@ -316,17 +328,8 @@ async def chat(session_id: str, request: ChatRequest, db: Session = Depends(get_
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # 2. Reconstruct ChatManager with history
-    # We need to convert DB messages back to Message objects
-    history = []
-    for msg in db_session.messages:
-        # Simple reconstruction for now
-        history.append(Message(
-            role=msg.role,
-            content=msg.content,
-            # Note: Tool calls reconstruction omitted for brevity in this step, 
-            # but would be needed for full context
-        ))
+    # 2. Reconstruct ChatManager with history (including tool_calls and tool_call_id)
+    history = [reconstruct_message_from_db(msg) for msg in db_session.messages]
     
     # Capture initial length BEFORE ChatManager modifies the list
     initial_history_count = len(history)
@@ -370,6 +373,78 @@ async def chat(session_id: str, request: ChatRequest, db: Session = Depends(get_
     except Exception as e:
         logger.error(f"❌ Chat error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/chat/{session_id}/stream")
+async def chat_stream(session_id: str, message: str, db: Session = Depends(get_db)):
+    """Stream chat responses with Server-Sent Events (SSE)"""
+    
+    # 1. Get session and load data BEFORE creating the generator
+    db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # 2. Reconstruct history with FULL message data (including tool_calls and tool_call_id)
+    history = [reconstruct_message_from_db(msg) for msg in db_session.messages]
+    
+    # Capture initial count BEFORE creating ChatManager
+    initial_history_count = len(history)
+    
+    # Create ChatManager with the history
+    chat_manager = ChatManager(
+        mcp_client=mcp_client,
+        history=history
+    )
+    
+    # 3. Create SSE generator
+    async def event_generator():
+        try:
+            # Stream events from ChatManager
+            async for event in chat_manager.send_message_stream(message):
+                # Format as SSE: "data: {...}\n\n"
+                event_data = json.dumps(event, ensure_ascii=False)
+                yield f"data: {event_data}\n\n"
+            
+            # 4. Save messages to DB using a NEW session (the original may be closed)
+            try:
+                from database import SessionLocal
+                with SessionLocal() as new_db:
+                    new_messages = chat_manager.conversation_history[initial_history_count:]
+                    for msg in new_messages:
+                        db_msg = MessageModel(
+                            session_id=session_id,
+                            role=msg.role,
+                            content=msg.content,
+                            tool_calls=[tc.__dict__ for tc in msg.tool_calls] if msg.tool_calls else None,
+                            tool_call_id=msg.tool_call_id,
+                            name=msg.name,
+                            timestamp=msg.timestamp
+                        )
+                        new_db.add(db_msg)
+                    new_db.commit()
+                    logger.info(f"✅ Saved {len(new_messages)} messages to DB")
+            except Exception as db_error:
+                logger.error(f"❌ Failed to save messages: {db_error}")
+            
+        except Exception as e:
+            logger.error(f"❌ Streaming error: {e}")
+            import traceback
+            traceback.print_exc()
+            error_event = json.dumps({'type': 'error', 'content': str(e)})
+            yield f"data: {error_event}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+            "Content-Type": "text/event-stream; charset=utf-8",
+        }
+    )
+
 
 if __name__ == "__main__":
     import uvicorn
