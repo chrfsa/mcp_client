@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Send, Bot, User, Terminal, Loader2 } from 'lucide-react';
+import { Send, Bot, User, Terminal, Loader2, ChevronDown, ChevronRight } from 'lucide-react';
 import { mcpApi } from '../lib/api';
 import type { Message } from '../types';
 import { cn } from '../lib/utils';
@@ -11,6 +11,8 @@ export function ChatInterface() {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [streamingContent, setStreamingContent] = useState<string>(''); // Dedicated state for streaming
+    const [isStreaming, setIsStreaming] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
@@ -21,7 +23,7 @@ export function ChatInterface() {
 
     useEffect(() => {
         scrollToBottom();
-    }, [messages]);
+    }, [messages, streamingContent]); // Also scroll when streaming content updates
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -40,36 +42,109 @@ export function ChatInterface() {
         e.preventDefault();
         if (!input.trim() || !sessionId || isLoading) return;
 
+        // Add user message to display immediately
         const userMsg: Message = { role: 'user', content: input, timestamp: new Date().toISOString() };
         setMessages(prev => [...prev, userMsg]);
+        const messageText = input;
         setInput('');
         setIsLoading(true);
+        setIsStreaming(true);
+        setStreamingContent('');
 
         try {
-            const response = await mcpApi.sendMessage(sessionId, userMsg.content || '');
+            mcpApi.streamMessage(sessionId, messageText, {
+                onToken: (token) => {
+                    // Just accumulate for visual display - don't touch messages
+                    setStreamingContent(prev => prev + token);
+                },
+                onToolCall: (toolCall) => {
+                    console.log('Tool call:', toolCall);
+                    // Show tool call in streaming content for visual feedback
+                    setStreamingContent(prev =>
+                        prev + `\n\n⏳ *Calling ${toolCall.server}.${toolCall.tool}...*\n\n`
+                    );
+                },
+                onToolResult: (result) => {
+                    console.log('Tool result:', result);
+                    // Show result in streaming content for visual feedback
+                    const status = result.success ? '✅' : '❌';
+                    setStreamingContent(prev =>
+                        prev + `${status} *${result.tool} completed*\n\n`
+                    );
+                },
+                onDone: (fullMessage) => {
+                    console.log('Stream done');
 
-            const assistantMsg: Message = {
-                role: 'assistant',
-                content: response.message,
-                timestamp: new Date().toISOString()
-            };
+                    // Clear streaming display
+                    setIsStreaming(false);
+                    setStreamingContent('');
+                    setIsLoading(false);
 
-            setMessages(prev => [...prev, assistantMsg]);
-
-            if (response.tool_calls_count > 0) {
-                loadHistory(sessionId);
-            }
+                    // Reload history from backend to get correct order
+                    loadHistory(sessionId);
+                },
+                onError: (error) => {
+                    console.error('Stream error:', error);
+                    setIsStreaming(false);
+                    setIsLoading(false);
+                    setStreamingContent('');
+                    setMessages(prev => [...prev, {
+                        role: 'assistant',
+                        content: `Error: ${error}`,
+                        timestamp: new Date().toISOString()
+                    }]);
+                }
+            });
 
         } catch (error) {
             console.error('Failed to send message:', error);
+            setIsStreaming(false);
+            setIsLoading(false);
+            setStreamingContent('');
             setMessages(prev => [...prev, {
                 role: 'assistant',
                 content: 'Error: Failed to get response from server.',
                 timestamp: new Date().toISOString()
             }]);
-        } finally {
-            setIsLoading(false);
         }
+    };
+
+    // Collapsible component for tool outputs
+    const CollapsibleToolOutput = ({ name, content }: { name?: string; content?: string }) => {
+        const [isExpanded, setIsExpanded] = useState(false);
+
+        // Truncate content for preview (first 100 chars)
+        const preview = content && content.length > 100
+            ? content.substring(0, 100) + '...'
+            : content;
+
+        return (
+            <div className="w-full">
+                <button
+                    onClick={() => setIsExpanded(!isExpanded)}
+                    className="flex items-center gap-2 w-full text-left hover:bg-white/5 rounded p-1 -m-1 transition-colors"
+                >
+                    {isExpanded ? (
+                        <ChevronDown size={14} className="shrink-0 opacity-70" />
+                    ) : (
+                        <ChevronRight size={14} className="shrink-0 opacity-70" />
+                    )}
+                    <span className="font-semibold opacity-80">
+                        🔧 {name || 'Tool Output'}
+                    </span>
+                </button>
+
+                {isExpanded ? (
+                    <div className="mt-2 pl-6 whitespace-pre-wrap break-words text-xs opacity-90 max-h-96 overflow-y-auto">
+                        {content}
+                    </div>
+                ) : (
+                    <div className="mt-1 pl-6 text-xs opacity-50 truncate">
+                        {preview}
+                    </div>
+                )}
+            </div>
+        );
     };
 
     if (!sessionId) {
@@ -118,10 +193,7 @@ export function ChatInterface() {
                                         : "bg-muted font-mono text-xs"
                             )}>
                                 {msg.role === 'tool' ? (
-                                    <div className="whitespace-pre-wrap break-words">
-                                        <div className="font-bold mb-1 opacity-70">Tool Output ({msg.name})</div>
-                                        {msg.content}
-                                    </div>
+                                    <CollapsibleToolOutput name={msg.name} content={msg.content} />
                                 ) : (
                                     <div className="prose prose-sm dark:prose-invert max-w-none break-words">
                                         <ReactMarkdown>{msg.content || ''}</ReactMarkdown>
@@ -135,7 +207,24 @@ export function ChatInterface() {
                     </div>
                 ))}
 
-                {isLoading && (
+                {/* Streaming content - show while tokens are being received */}
+                {isStreaming && streamingContent && (
+                    <div className="flex gap-4 max-w-3xl mx-auto">
+                        <div className="w-8 h-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center shrink-0">
+                            <Bot size={16} />
+                        </div>
+                        <div className="flex flex-col gap-1 min-w-0 items-start">
+                            <div className="bg-card border rounded-lg px-4 py-2 shadow-sm text-sm">
+                                <div className="prose prose-sm dark:prose-invert max-w-none break-words">
+                                    <ReactMarkdown>{streamingContent}</ReactMarkdown>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Show 'Thinking...' only when loading but no content yet */}
+                {isLoading && !streamingContent && (
                     <div className="flex gap-4 max-w-3xl mx-auto">
                         <div className="w-8 h-8 rounded-full bg-secondary text-secondary-foreground flex items-center justify-center shrink-0">
                             <Loader2 size={16} className="animate-spin" />

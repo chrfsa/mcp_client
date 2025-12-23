@@ -386,6 +386,13 @@ class UniversalMCPClient:
             # Close the stack without timeout - let it complete naturally
             await server_info.stack.aclose()
             logger.info(f"✅ Server '{server_info.name}' closed")
+        except RuntimeError as e:
+            # Ignore "Attempted to exit cancel scope in a different task" warnings
+            # This is expected when closing anyio cancel scopes from different asyncio tasks
+            if "cancel scope" in str(e).lower():
+                logger.debug(f"ℹ️  Server '{server_info.name}' closed (anyio cancel scope warning ignored)")
+            else:
+                logger.warning(f"⚠️  Error closing '{server_info.name}': {e}")
         except Exception as e:
             logger.warning(f"⚠️  Error closing '{server_info.name}': {e}")
     
