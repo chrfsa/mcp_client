@@ -6,6 +6,10 @@ A modern chat application that integrates the **Model Context Protocol (MCP)** t
 ![MCP](https://img.shields.io/badge/MCP-Compatible-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
+## 🎬 Demo
+
+![MCP Client Demo](docs/Capturevidodu23-12-2025220355-ezgif.com-video-to-gif-converter.gif)
+
 ## 🎯 Features
 
 - **Real-time chat** with token-by-token streaming
@@ -198,4 +202,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
-**Built with ❤️ to simplify MCP integration in chat applications.**
+
